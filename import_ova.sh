@@ -31,6 +31,18 @@ import_ova_file() {
         # Extract filename without extension
         _import_ova_file_filename_no_extension="${_import_ova_file_path##*/}"
         _import_ova_file_filename_no_extension="${_import_ova_file_filename_no_extension%.*}"
+	
+	# Extract .ova file
+	cd "$_import_ova_file_dir"
+	tar -xvf "./$_import_ova_file_path"
+	
+	# Unzip the vmdk file as needed
+	_import_ova_file_vmdk_file=$(ls | grep "$_import_ova_file_no_extension.*disk.*\.vmdk$")
+
+	if [ ! "${_import_ova_file_vmdk_file##*.}" = "gz" ]; then
+		gzip -d "$_import_ova_file_vmdk_file"	
+	fi
+
 
         # Next:
         # Search to see if a filename_no_ext.ovf or filename_no_ext.ova.ovf exists
