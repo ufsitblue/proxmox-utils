@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 
 # Globals
 START_VMID=0
@@ -16,19 +16,16 @@ show_help() {
     echo
 }
 
+# Function to check if all commands in the list exist
 check_commands() {
-  all_exist=0  # Assume all commands exist initially
-
-  for cmd in "$@"; do
-    if command -v "$cmd" >/dev/null 2>&1; then
-      echo "Command '$cmd' exists."
-    else
-      echo "Command '$cmd' does not exist."
-      all_exist=1  # Set to 1 if any command does not exist
-    fi
-  done
-
-  return $all_exist  # Return 0 if all exist, 1 if any are missing
+    all_exist=0
+    for cmd in $1; do
+        if ! command -v "$cmd" >/dev/null 2>&1; then
+            echo "Command '$cmd' does not exist."
+            all_exist=1
+        fi
+    done
+    return $all_exist  # Return 0 if all exist, 1 if any are missing
 }
 
 import_ova_file() {
@@ -49,31 +46,40 @@ import_ova_file() {
         fi
 
         # Extract filename without extension
-        _import_ova_file_filename_no_extension="${_import_ova_file_path##*/}"
-        _import_ova_file_filename_no_extension="${_import_ova_file_filename_no_extension%.*}"
+        _import_ova_file_filename="${_import_ova_file_path##*/}"
+        _import_ova_file_filename_no_extension="${_import_ova_file_filename%.*}"
 	
 	# Extract .ova file
-	cd "$_import_ova_file_dir"
-	tar -xvf "./$_import_ova_file_path"
+        echo "Found OVA file: $_import_ova_file_filename"
+        echo "Extracting OVA file..."
+	cd "$_import_ova_file_dir" || echo "Could not enter directory: $_import_ova_file_dir."
+	tar -xvf "./$_import_ova_file_path" > /dev/null
 	
 
         # Import OVF
         _file_extensions=".ovf .ova.ovf"
+        _import_ova_file_found_ovf=0
         for _file_extension in $_file_extensions; do
                 if [ -f "${_import_ova_file_filename_no_extension}${_file_extension}" ]; then
-                        qm importovf "$_import_ova_file_vmid" "${_import_ova_file_filename_no_extension}${_file_extension}" local-lvm
+                        echo "Found OVF file: ${_import_ova_file_filename_no_extension}${_file_extension}"
+                        echo "Importing OVF file..."
+                        qm importovf "$_import_ova_file_vmid" "${_import_ova_file_filename_no_extension}${_file_extension}" local-lvm > /dev/null
+                        _import_ova_file_found_ovf=1
                         break
-                else
-                        echo "Extracted OVA is missing the OVF: ${_import_ova_file_filename_no_extension}${_file_extension}"
                 fi
         done
+
+        if [ $_import_ova_file_found_ovf -ne 1 ]; then
+                echo "Extracted OVA is missing the OVF: ${_import_ova_file_filename_no_extension}${_file_extension}"
+        fi
 
         # Delete the imported disk
         # This is because the imported VMDK doesn't work normally
         # This also assumes there is only one disk per VM
-        qm set "$_import_ova_file_vmid" -delete scsi0
-        qm set "$_import_ova_file_vmid" -delete unused0
-        lvremove "/dev/pve/vm-$_import_ova_file_vmid-disk-0"
+        echo "Deleting initial disk..."
+        qm set "$_import_ova_file_vmid" -delete scsi0 > /dev/null
+        qm set "$_import_ova_file_vmid" -delete unused0 > /dev/null
+        lvremove "/dev/pve/vm-$_import_ova_file_vmid-disk-0" > /dev/null 2>&1
 
         # Unzip the VMDK file if needed
         _import_ova_file_vmdk_file=""
@@ -84,6 +90,7 @@ import_ova_file() {
                 _file_extension="${_import_ova_file_vmdk_file##*.}"
                 
                 if [ "$_file_extension" = "gz" ]; then
+                        echo "Unzipping VMDK disk file..."
                         gzip -d "$_import_ova_file_vmdk_file"
                         break  # Exit after handling the first gzipped file
                 fi
@@ -95,14 +102,18 @@ import_ova_file() {
         fi
 
         # Convert the VMDK to a compressed Qcow2 image
+        echo "Converting VMDK disk to Qcow2..."
         _import_ova_file_qcow_image="$_import_ova_file_filename_no_extension.qcow2"
         qemu-img convert -f vmdk -O qcow2 -c "$_import_ova_file_filename_no_extension.ova-disk1.vmdk" "$_import_ova_file_qcow_image"
 
         # Import converted image
-        qm importdisk "$_import_ova_file_vmid" "$_import_ova_file_qcow_image" local-lvm
-        qm set "$_import_ova_file_vmid" --scsi0 "local-lvm:vm-$_import_ova_file_vmid-disk-0"
+        echo "Importing Qcow2 image..."
+        qm importdisk "$_import_ova_file_vmid" "$_import_ova_file_qcow_image" local-lvm > /dev/null
+        qm set "$_import_ova_file_vmid" --scsi0 "local-lvm:vm-$_import_ova_file_vmid-disk-0" > /dev/null
 
-        echo "Succesfully imported: $_import_ova_file_filename_no_extension.ova"
+        echo "Cleaning up files..."
+        cleanup_files "$_import_ova_file_dir" "$_import_ova_file_filename_no_extension"
+        echo "Succesfully imported: $_import_ova_file_filename_no_extension (VMID: $_import_ova_file_vmid)"
 }       
 
 validate_vmid() {
@@ -123,7 +134,7 @@ validate_vmid() {
 
     # Loop through the VMID range and check for availability
     _validate_vmid_current_vmid="$_validate_vmid_vmid"
-    _validate_vmid_end_vmid=$((_validate_vmid_vmid + _validate_vmid_range - 1))
+    _validate_vmid_end_vmid=$((_validate_vmid_vmid + $_validate_vmid_range - 1))
 
     while [ "$_validate_vmid_current_vmid" -le "$_validate_vmid_end_vmid" ]; do
         # Check if the VMID is already in use
@@ -161,7 +172,7 @@ count_ova_files_in_directory() {
     # Recursively count the number of .ova files in the directory
     _validate_ova_count=$(find "$_validate_ova_dir_path" -type f -name "*.ova" | wc -l)
 
-    return "$_validate_ova_count"
+    echo "$_validate_ova_count"
 }
 
 # Function to generate a random number between 100 and 1000 (factors of 10)
@@ -176,9 +187,23 @@ find_valid_vmid_range() {
 
         # Validate the VMID with a range of 20
         if validate_vmid "$_find_valid_vmid_range_random_vmid" 20; then
-            return "$_find_valid_vmid_range_random_vmid"
+           break 
         fi
     done
+
+    echo "$_find_valid_vmid_range_random_vmid"
+}
+
+cleanup_files() {
+    _cleanup_files_dir="$1"
+    _cleanup_files_basename_pattern="$2"
+
+    if ! validate_directory_exists "$_cleanup_files_dir"; then
+        echo "Couldn't clean up files. Directory: $_cleanup_files_dir not found!"
+        exit_fail
+    fi
+
+    find "$_cleanup_files_dir" -type f ! -name '*.ova' ! -name '*.sh' -name "*$_cleanup_files_basename_pattern*" -exec rm -f {} +
 }
 
 exit_success() {
@@ -191,52 +216,49 @@ exit_fail() {
         exit 1
 }
 
+# MAIN LOGIC:
+#------------#
+
+# Verify that all commands are present
+check_commands "$REQUIRED_COMMANDS"
+if [ $? -ne 0 ]; then
+    echo "Some required commands are missing."
+    exit_fail
+fi
+
+# Find a valid VMID range for imported images
+START_VMID=$(find_valid_vmid_range)
+
 # Parse command-line args
-while [[ "$1" != "" ]]; do
-        # Verify that all commands are present
-        if check_commands "$REQUIRED_COMMANDS" -eq 0; then
-                echo "All required commands exist."
-        else
-                echo "Some required commands are missing."
-                exit_fail
-        fi
-
-        # Find a valid VMID range for imported images
-        START_VMID=$(find_valid_vmid_range)
-
-        case $1 in
-                -h | --help )
-                        show_help
-                        exit 0
-                        ;;
-                                
-                -i | --start-vmid )
-                        shift
-                        START_VMID="$1"
-                        ;;
-
-                -f | --file )
-                        shift
-                        validate_vmid "$START_VMID" 1
-                        import_ova_file "$1" "$START_VMID" # When importing only one VM just use the START_VMID directly
-                        exit_success
-                        ;;
-
-                -d | --directory )
-                        shift
-                        num_ova_files=$(count_ova_files_in_directory "$1")
-                        validate_vmid "$START_VMID" "$num_ova_files"
-                        import_directory "$1"
-                        exit_success
-                        ;;
-
-                * )
-                        echo "Unknown option: $1"
-                        show_help
-                        exit_fail
-                        ;;
-        esac
-        shift
+while [ "$1" != "" ]; do
+    case $1 in
+        -h | --help )
+            show_help
+            exit 0
+            ;;
+        -i | --start-vmid )
+            shift
+            START_VMID="$1"
+            ;;
+        -f | --file )
+            shift
+            validate_vmid "$START_VMID" 1
+            import_ova_file "$1" "$START_VMID" # When importing only one VM just use the START_VMID directly
+            exit_success
+            ;;
+        -d | --directory )
+            shift
+            num_ova_files=$(count_ova_files_in_directory "$1")
+            validate_vmid "$START_VMID" "$num_ova_files"
+            import_directory "$1"
+            exit_success
+            ;;
+        * )
+            echo "Unknown option: $1"
+            show_help
+            ;;
+    esac
+    shift
 done
 
 
