@@ -12,6 +12,7 @@ show_help() {
     echo "  -h, --help          Show this help message and exit"
     echo "  -f, --file          Specify a single .ova file to process"
     echo "  -d, --directory     Specify a directory of .ova files to process recursively"
+    echo "  -i, --start-vmid    Specify starting VMID for imported OVAs."
     echo
 }
 
